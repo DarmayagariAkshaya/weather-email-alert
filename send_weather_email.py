@@ -5,42 +5,41 @@ from email.message import EmailMessage
 from supabase import create_client
 from datetime import datetime, timedelta
 
-# -------------------------
-# ENV VARIABLES (GitHub)
-# -------------------------
+# -----------------------------
+# ENVIRONMENT VARIABLES
+# -----------------------------
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]   # SERVICE ROLE KEY
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]      # SERVICE ROLE KEY
 OPENWEATHER_API_KEY = os.environ["OPENWEATHER_API_KEY"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 
-# -------------------------
-# CONNECT SUPABASE
-# -------------------------
+# -----------------------------
+# CONNECT TO SUPABASE
+# -----------------------------
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -------------------------
+# -----------------------------
 # CURRENT TIME (IST)
-# -------------------------
+# -----------------------------
 ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
 current_time = ist_time.strftime("%H:%M")
 today_date = str(ist_time.date())
 
 print("================================")
-print("Current IST Time :", current_time)
+print("Current IST Time:", current_time)
 print("Today Date      :", today_date)
 print("================================")
 
-# -------------------------
+# -----------------------------
 # FETCH USERS
-# -------------------------
+# -----------------------------
 users = supabase.table("users").select("*").execute().data or []
-
 print("Total users:", len(users))
 
-# -------------------------
-# LOOP USERS
-# -------------------------
+# -----------------------------
+# PROCESS USERS
+# -----------------------------
 for user in users:
     email = user["email"]
     name = user["name"]
@@ -53,18 +52,25 @@ for user in users:
     print("Alert time:", alert_time)
     print("Last sent:", last_sent)
 
-    # 1️⃣ Check time
-    if alert_time != current_time:
+    # -----------------------------
+    # TIME WINDOW CHECK (±2 minutes)
+    # -----------------------------
+    alert_dt = datetime.strptime(alert_time, "%H:%M")
+    current_dt = datetime.strptime(current_time, "%H:%M")
+
+    if abs((alert_dt - current_dt).total_seconds()) > 120:
         continue
 
-    # 2️⃣ Avoid duplicate mail
+    # -----------------------------
+    # PREVENT DUPLICATE EMAIL
+    # -----------------------------
     if last_sent == today_date:
-        print("Already sent today → skipping")
+        print("Already sent today, skipping")
         continue
 
-    # -------------------------
-    # WEATHER API
-    # -------------------------
+    # -----------------------------
+    # FETCH WEATHER
+    # -----------------------------
     weather_url = (
         f"https://api.openweathermap.org/data/2.5/weather"
         f"?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
@@ -76,12 +82,12 @@ for user in users:
         print("Weather API error")
         continue
 
-    temp = weather["main"]["temp"]
+    temperature = weather["main"]["temp"]
     condition = weather["weather"][0]["description"]
 
-    # -------------------------
-    # EMAIL
-    # -------------------------
+    # -----------------------------
+    # CREATE EMAIL
+    # -----------------------------
     msg = EmailMessage()
     msg["Subject"] = f"Daily Weather Alert – {location}"
     msg["From"] = EMAIL_USER
@@ -92,7 +98,7 @@ for user in users:
 Hello {name},
 
 📍 Location: {location}
-🌡 Temperature: {temp}°C
+🌡 Temperature: {temperature}°C
 ☁ Condition: {condition}
 
 This is your daily weather alert.
@@ -102,16 +108,19 @@ AI Weather Alert System
 """
     )
 
+    # -----------------------------
+    # SEND EMAIL
+    # -----------------------------
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
             smtp.send_message(msg)
 
-        print("Email sent to", email)
+        print("Email sent to:", email)
 
-        # -------------------------
+        # -----------------------------
         # UPDATE last_sent_date
-        # -------------------------
+        # -----------------------------
         supabase.table("users").update({
             "last_sent_date": today_date
         }).eq("email", email).execute()
@@ -121,4 +130,4 @@ AI Weather Alert System
     except Exception as e:
         print("Email failed:", e)
 
-print("=========== DONE ===========")
+print("=========== SCRIPT DONE ===========")
