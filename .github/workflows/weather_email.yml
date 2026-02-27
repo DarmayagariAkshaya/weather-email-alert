@@ -2,15 +2,15 @@ name: Daily Weather Email
 
 on:
   schedule:
-    - cron: "* * * * *"   # RUNS EVERY MINUTE
-  workflow_dispatch:      # optional manual run
+    - cron: "* * * * *"   # RUNS EVERY MINUTE (UTC)
+  workflow_dispatch:
 
 jobs:
   send-weather-email:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run email script
+      - name: Run Weather Script
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
