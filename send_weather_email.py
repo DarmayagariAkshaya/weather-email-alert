@@ -12,38 +12,38 @@ import requests
 def calculate_health_metrics(avg_temp, humidity, condition):
     """
     Calculates a risk score from 0-100 and provides 
-    contextual health advice.
+    contextual health advice based on environmental data.
     """
-    risk_score = 0
+    risk_score = 10  # Base level for environmental change
     suggestions = []
 
     # 1. Temperature Analysis
     if avg_temp > 38:
         risk_score += 60
-        suggestions.append("Extreme heat detected. High risk of heat exhaustion; stay in air conditioning.")
+        suggestions.append("⚠️ Extreme heat: High risk of heatstroke. Stay in cooled environments.")
     elif avg_temp > 32:
         risk_score += 30
-        suggestions.append("Elevated temperatures. Increase fluid intake to prevent dehydration.")
+        suggestions.append("☀️ High Temp: Increased dehydration risk. Drink 1L extra water today.")
     elif avg_temp < 15:
         risk_score += 25
-        suggestions.append("Cold weather alert. Wear thermal layers to protect cardiovascular health.")
+        suggestions.append("🥶 Cold Alert: Wear thermal layers to protect cardiovascular health.")
     
-    # 2. Humidity & Respiratory Health
+    # 2. Humidity Impact
     if humidity > 75:
         risk_score += 15
-        suggestions.append("High humidity may cause respiratory discomfort or trigger asthma.")
+        suggestions.append("💧 High humidity: May trigger respiratory discomfort or asthma.")
     
     # 3. Weather Condition Impact
     cond_lower = condition.lower()
     if "rain" in cond_lower or "drizzle" in cond_lower:
         risk_score += 10
-        suggestions.append("Damp conditions: Increased risk of seasonal allergies and joint pain.")
+        suggestions.append("☔ Damp conditions: Higher risk of joint pain and seasonal allergies.")
     if "storm" in cond_lower:
         risk_score += 20
-        suggestions.append("Severe weather: Stay indoors to avoid injury and high-stress environmental factors.")
+        suggestions.append("🌩️ Severe weather: Stay indoors to avoid environmental stress.")
 
-    # Final logic
-    risk_score = min(risk_score + 10, 100) # Base 10 for environmental shifts
+    # Final Score Normalization
+    risk_score = min(risk_score, 100)
     
     if risk_score > 70:
         level = "🔴 CRITICAL"
@@ -51,92 +51,129 @@ def calculate_health_metrics(avg_temp, humidity, condition):
         level = "🟡 MODERATE"
     else:
         level = "🟢 LOW"
-        suggestions = ["Weather conditions are optimal for outdoor activities. Maintain standard hydration."]
+        if not suggestions:
+            suggestions.append("Conditions are optimal. Maintain standard physical activity.")
 
-    return risk_score, level, " ".join(suggestions[:2]) # Returns top 2 suggestions
+    return risk_score, level, " ".join(suggestions[:2])
 
 # =============================
 # 1️⃣ Setup & Environment
 # =============================
+print("Starting Weather & Health Workflow...")
+
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")
+
+if not url or not key:
+    raise Exception("Missing Supabase credentials in Environment Secrets!")
+
 supabase = create_client(url, key)
 
+# Get current IST time for comparison
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.now(ist)
 current_time = now.strftime("%H:%M")
 today_date = now.strftime("%Y-%m-%d")
 
-# =============================
-# 2️⃣ Process Users
-# =============================
-response = supabase.table("users").select("*").execute()
-users = response.data
+print(f"Current Time (IST): {current_time}")
 
+# =============================
+# 2️⃣ Fetch Users from Supabase
+# =============================
+try:
+    response = supabase.table("users").select("*").execute()
+    users = response.data
+except Exception as e:
+    print(f"Failed to fetch users: {e}")
+    exit()
+
+# =============================
+# 3️⃣ Main Processing Loop
+# =============================
 for user in users:
-    alert_time = user["alert_time"][:5]
-    
-    # Check if time is matched (or passed) and not sent today
-    if current_time >= alert_time and user.get("last_sent_date") != today_date:
-        
-        # 3️⃣ Fetch 24h Forecast
-        api_key = os.getenv("OPENWEATHER_API_KEY")
-        forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?q={user['location']}&appid={api_key}&units=metric"
-        
-        res = requests.get(forecast_url).json()
-        if res.get("cod") != "200":
-            continue
+    try:
+        user_email = user["email"]
+        alert_time = user["alert_time"][:5]  # Format HH:MM
+        location = user["location"]
+        last_sent = user.get("last_sent_date")
 
-        # Calculate averages for the next 24 hours (8 blocks of 3 hours)
-        forecast_list = res["list"][:8]
-        avg_temp = sum(item["main"]["temp"] for item in forecast_list) / 8
-        avg_humidity = sum(item["main"]["humidity"] for item in forecast_list) / 8
-        main_condition = forecast_list[0]["weather"][0]["description"]
+        print(f"\n--- Checking: {user_email} ---")
 
-        # 4️⃣ Generate AI Insights
-        risk_val, risk_lvl, health_tip = calculate_health_metrics(avg_temp, avg_humidity, main_condition)
+        # 🕒 Check if it's time to send (Current time is >= Alert time)
+        if current_time >= alert_time:
+            
+            # Check if already sent today
+            if last_sent == today_date:
+                print(f"Skipping: {user_email} already received their mail today.")
+                continue
 
-        # 5️⃣ Build Email Body
-        subject = f"🚨 Health Risk Alert: {risk_lvl} ({user['location']})"
-        body = f"""
-Daily Health & Weather Intelligence Report
+            print(f"Triggering for {user_email} (Alert: {alert_time})")
 
-LOCATION: {user['location']}
+            # 🌦️ Fetch 5-Day/3-Hour Forecast for 24h Average
+            api_key = os.getenv("OPENWEATHER_API_KEY")
+            forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?q={location}&appid={api_key}&units=metric"
+            
+            weather_data = requests.get(forecast_url).json()
+            if weather_data.get("cod") != "200":
+                print(f"Weather API error for {location}: {weather_data.get('message')}")
+                continue
+
+            # Calculate 24h averages (8 forecast blocks of 3 hours each)
+            forecast_list = weather_data["list"][:8]
+            avg_temp = sum(item["main"]["temp"] for item in forecast_list) / 8
+            avg_hum = sum(item["main"]["humidity"] for item in forecast_list) / 8
+            main_condition = forecast_list[0]["weather"][0]["description"]
+
+            # 🧠 Generate AI Risk Score and Suggestions
+            risk_val, risk_lvl, health_tip = calculate_health_metrics(avg_temp, avg_hum, main_condition)
+
+            # ✉️ Build Email
+            subject = f"🩺 Health & Weather Report: {risk_lvl}"
+            body = f"""
+AI Weather-Health Intelligence Report
+
+LOCATION: {location}
+DATE: {today_date}
+---------------------------------------------
 24H AVG TEMP: {avg_temp:.1f}°C
-HUMIDITY: {int(avg_humidity)}%
-CONDITION: {main_condition.capitalize()}
+AVG HUMIDITY: {int(avg_hum)}%
+EXPECTED CONDITION: {main_condition.capitalize()}
 
 ---------------------------------------------
-AI HEALTH RISK SCORE: {risk_val}/100
-RISK LEVEL: {risk_lvl}
+📊 AI HEALTH RISK SCORE: {risk_val}/100
+⚠️ RISK LEVEL: {risk_lvl}
 ---------------------------------------------
 
-HEALTH SUGGESTION:
+💡 HEALTH SUGGESTION:
 {health_tip}
 
-Note: This is an AI-generated assessment based on environmental data. 
-If you have underlying conditions, please consult your physician.
-
-Stay safe,
-Your AI Weather Assistant
+Stay safe and healthy!
+Your AI Assistant
 """
 
-        # 6️⃣ Send & Update
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = os.getenv("EMAIL_USER")
-        msg["To"] = user["email"]
+            # 📤 Send Email
+            message = MIMEText(body)
+            message["Subject"] = subject
+            message["From"] = os.getenv("EMAIL_USER")
+            message["To"] = user_email
 
-        try:
             with smtplib.SMTP("smtp.gmail.com", 587) as server:
                 server.starttls()
                 server.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
-                server.send_message(msg)
-            
-            # Mark as sent in Supabase
-            supabase.table("users").update({"last_sent_date": today_date}).eq("id", user["id"]).execute()
-            print(f"Success: Health report sent to {user['email']}")
-        except Exception as e:
-            print(f"Failed to send to {user['email']}: {e}")
+                server.send_message(message)
 
-print("Workflow complete.")
+            # 💾 Update Supabase (Using 'email' as the identifier)
+            supabase.table("users").update(
+                {"last_sent_date": today_date}
+            ).eq("email", user_email).execute()
+
+            print(f"✅ Success: Report sent and DB updated for {user_email}")
+
+        else:
+            print(f"Waiting: Current time {current_time} hasn't reached alert time {alert_time}")
+
+    except Exception as e:
+        # If one user fails, the script continues to the next user
+        print(f"❌ Error processing {user.get('email', 'Unknown')}: {e}")
+
+print("\nWorkflow complete.")
