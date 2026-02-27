@@ -3,131 +3,132 @@ import requests
 import smtplib
 from email.message import EmailMessage
 from supabase import create_client
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-# -----------------------------
+# =============================
 # ENVIRONMENT VARIABLES
-# -----------------------------
+# =============================
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]      # SERVICE ROLE KEY
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENWEATHER_API_KEY = os.environ["OPENWEATHER_API_KEY"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 
-# -----------------------------
+# =============================
 # CONNECT TO SUPABASE
-# -----------------------------
+# =============================
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -----------------------------
-# CURRENT TIME (IST)
-# -----------------------------
-ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
-current_time = ist_time.strftime("%H:%M")
-today_date = str(ist_time.date())
+# =============================
+# GET CURRENT IST TIME
+# =============================
+ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
+current_time = ist_now.strftime("%H:%M")
+today_date = ist_now.strftime("%Y-%m-%d")
 
-print("================================")
-print("Current IST Time:", current_time)
-print("Today Date      :", today_date)
-print("================================")
+print("====================================")
+print("Current IST Time :", current_time)
+print("Today Date       :", today_date)
+print("====================================")
 
-# -----------------------------
-# FETCH USERS
-# -----------------------------
-users = supabase.table("users").select("*").execute().data or []
-print("Total users:", len(users))
+# =============================
+# FETCH USERS FROM DATABASE
+# =============================
+response = supabase.table("users").select("*").execute()
+users = response.data or []
 
-# -----------------------------
-# PROCESS USERS
-# -----------------------------
+print("Total users found:", len(users))
+
+# =============================
+# LOOP THROUGH USERS
+# =============================
 for user in users:
     email = user["email"]
     name = user["name"]
     location = user["location"]
-    alert_time = user["alert_time"][:5]
+    alert_time = user["alert_time"][:5]  # Convert 11:40:00 → 11:40
     last_sent = user.get("last_sent_date")
 
-    print("--------------------------------")
+    print("------------------------------------")
     print("User:", email)
-    print("Alert time:", alert_time)
-    print("Last sent:", last_sent)
+    print("Alert Time:", alert_time)
+    print("Last Sent:", last_sent)
 
-    # -----------------------------
-    # TIME WINDOW CHECK (±2 minutes)
-    # -----------------------------
-    alert_dt = datetime.strptime(alert_time, "%H:%M")
-    current_dt = datetime.strptime(current_time, "%H:%M")
-
-    if abs((alert_dt - current_dt).total_seconds()) > 120:
+    # =============================
+    # CHECK IF TIME MATCHES
+    # =============================
+    if current_time != alert_time:
+        print("Time does not match. Skipping.")
         continue
 
-    # -----------------------------
+    # =============================
     # PREVENT DUPLICATE EMAIL
-    # -----------------------------
+    # =============================
     if last_sent == today_date:
-        print("Already sent today, skipping")
+        print("Already sent today. Skipping.")
         continue
 
-    # -----------------------------
-    # FETCH WEATHER
-    # -----------------------------
+    print("Time matched. Preparing email...")
+
+    # =============================
+    # FETCH WEATHER DATA
+    # =============================
     weather_url = (
         f"https://api.openweathermap.org/data/2.5/weather"
         f"?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
     )
 
-    weather = requests.get(weather_url).json()
+    weather_response = requests.get(weather_url)
+    weather = weather_response.json()
 
     if "main" not in weather:
-        print("Weather API error")
+        print("Weather API error for:", location)
         continue
 
     temperature = weather["main"]["temp"]
     condition = weather["weather"][0]["description"]
 
-    # -----------------------------
+    # =============================
     # CREATE EMAIL
-    # -----------------------------
+    # =============================
     msg = EmailMessage()
     msg["Subject"] = f"Daily Weather Alert – {location}"
     msg["From"] = EMAIL_USER
     msg["To"] = email
 
-    msg.set_content(
-        f"""
+    msg.set_content(f"""
 Hello {name},
 
 📍 Location: {location}
 🌡 Temperature: {temperature}°C
 ☁ Condition: {condition}
 
-This is your daily weather alert.
-
-Stay safe 🌦️
+Have a great day! 🌤
 AI Weather Alert System
-"""
-    )
+""")
 
-    # -----------------------------
+    # =============================
     # SEND EMAIL
-    # -----------------------------
+    # =============================
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
             smtp.send_message(msg)
 
-        print("Email sent to:", email)
+        print("Email sent successfully to:", email)
 
-        # -----------------------------
+        # =============================
         # UPDATE last_sent_date
-        # -----------------------------
+        # =============================
         supabase.table("users").update({
             "last_sent_date": today_date
         }).eq("email", email).execute()
 
-        print("last_sent_date updated")
+        print("Database updated for:", email)
 
     except Exception as e:
-        print("Email failed:", e)
+        print("Email failed for:", email)
+        print("Error:", e)
 
-print("=========== SCRIPT DONE ===========")
+print("=========== SCRIPT COMPLETED ===========")
