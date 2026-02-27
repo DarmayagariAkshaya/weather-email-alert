@@ -1,134 +1,129 @@
 import os
-import requests
-import smtplib
-from email.message import EmailMessage
 from supabase import create_client
 from datetime import datetime
-from zoneinfo import ZoneInfo
+import pytz
+import smtplib
+from email.mime.text import MIMEText
+import requests
+
+print("Script started...")
 
 # =============================
-# ENVIRONMENT VARIABLES
+# 1️⃣ Connect to Supabase
 # =============================
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-OPENWEATHER_API_KEY = os.environ["OPENWEATHER_API_KEY"]
-EMAIL_USER = os.environ["EMAIL_USER"]
-EMAIL_PASS = os.environ["EMAIL_PASS"]
+
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+
+if not url or not key:
+    raise Exception("Supabase credentials not found!")
+
+supabase = create_client(url, key)
 
 # =============================
-# CONNECT TO SUPABASE
+# 2️⃣ Get Current IST Time
 # =============================
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+ist = pytz.timezone("Asia/Kolkata")
+now = datetime.now(ist)
+
+current_time = now.strftime("%H:%M")
+today_date = now.strftime("%Y-%m-%d")
+
+print("Current IST Time:", current_time)
 
 # =============================
-# GET CURRENT IST TIME
+# 3️⃣ Fetch Users from Database
 # =============================
-ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
-current_time = ist_now.strftime("%H:%M")
-today_date = ist_now.strftime("%Y-%m-%d")
 
-print("====================================")
-print("Current IST Time :", current_time)
-print("Today Date       :", today_date)
-print("====================================")
-
-# =============================
-# FETCH USERS FROM DATABASE
-# =============================
 response = supabase.table("users").select("*").execute()
-users = response.data or []
+users = response.data
 
-print("Total users found:", len(users))
+if not users:
+    print("No users found.")
+    exit()
 
 # =============================
-# LOOP THROUGH USERS
+# 4️⃣ Loop Through Users
 # =============================
+
 for user in users:
-    email = user["email"]
-    name = user["name"]
+
+    user_email = user["email"]
+    alert_time = user["alert_time"][:5]  # convert HH:MM:SS to HH:MM
     location = user["location"]
-    alert_time = user["alert_time"][:5]  # Convert 11:40:00 → 11:40
     last_sent = user.get("last_sent_date")
 
-    print("------------------------------------")
-    print("User:", email)
-    print("Alert Time:", alert_time)
-    print("Last Sent:", last_sent)
+    print(f"Checking user: {user_email} | Alert Time: {alert_time}")
 
     # =============================
-    # CHECK IF TIME MATCHES
+    # 5️⃣ Time Match Check
     # =============================
-    if current_time != alert_time:
-        print("Time does not match. Skipping.")
-        continue
 
-    # =============================
-    # PREVENT DUPLICATE EMAIL
-    # =============================
-    if last_sent == today_date:
-        print("Already sent today. Skipping.")
-        continue
+    if alert_time == current_time:
 
-    print("Time matched. Preparing email...")
+        if last_sent == today_date:
+            print("Already sent today. Skipping...")
+            continue
 
-    # =============================
-    # FETCH WEATHER DATA
-    # =============================
-    weather_url = (
-        f"https://api.openweathermap.org/data/2.5/weather"
-        f"?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
-    )
-
-    weather_response = requests.get(weather_url)
-    weather = weather_response.json()
-
-    if "main" not in weather:
-        print("Weather API error for:", location)
-        continue
-
-    temperature = weather["main"]["temp"]
-    condition = weather["weather"][0]["description"]
-
-    # =============================
-    # CREATE EMAIL
-    # =============================
-    msg = EmailMessage()
-    msg["Subject"] = f"Daily Weather Alert – {location}"
-    msg["From"] = EMAIL_USER
-    msg["To"] = email
-
-    msg.set_content(f"""
-Hello {name},
-
-📍 Location: {location}
-🌡 Temperature: {temperature}°C
-☁ Condition: {condition}
-
-Have a great day! 🌤
-AI Weather Alert System
-""")
-
-    # =============================
-    # SEND EMAIL
-    # =============================
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
-            smtp.send_message(msg)
-
-        print("Email sent successfully to:", email)
+        print("Time matched. Fetching weather...")
 
         # =============================
-        # UPDATE last_sent_date
+        # 6️⃣ Get Weather Data
         # =============================
-        supabase.table("users").update({
-            "last_sent_date": today_date
-        }).eq("email", email).execute()
 
-        print("Database updated for:", email)
+        api_key = os.getenv("OPENWEATHER_API_KEY")
+        weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={api_key}&units=metric"
 
-    except Exception as e:
-        print("Email failed for:", email)
-        print("Error:", e)
+        weather_response = requests.get(weather_url).json()
 
-print("=========== SCRIPT COMPLETED ===========")
+        if weather_response.get("cod") != 200:
+            print("Weather fetch failed.")
+            continue
+
+        temp = weather_response["main"]["temp"]
+        description = weather_response["weather"][0]["description"]
+
+        # =============================
+        # 7️⃣ Send Email
+        # =============================
+
+        subject = "🌤 Daily Weather Alert"
+        body = f"""
+Hello,
+
+Here is your weather update for {location}:
+
+Temperature: {temp}°C
+Condition: {description}
+
+Have a great day!
+"""
+
+        message = MIMEText(body)
+        message["Subject"] = subject
+        message["From"] = os.getenv("EMAIL_USER")
+        message["To"] = user_email
+
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+                server.send_message(message)
+
+            print("Email sent successfully!")
+
+            # =============================
+            # 8️⃣ Update last_sent_date
+            # =============================
+
+            supabase.table("users").update(
+                {"last_sent_date": today_date}
+            ).eq("id", user["id"]).execute()
+
+            print("Database updated.")
+
+        except Exception as e:
+            print("Email failed:", e)
+
+print("Script finished.")
