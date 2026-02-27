@@ -1,31 +1,34 @@
-name: Daily Weather Email
+name: Automatic Weather Email Alert
 
 on:
   schedule:
-    - cron: "* * * * *"   # RUNS EVERY MINUTE (UTC)
-  workflow_dispatch:
+    - cron: "* * * * *"   # Runs every minute
+  workflow_dispatch:      # Allows manual run also
 
 jobs:
-  send-weather-email:
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install Dependencies
+        run: |
+          pip install supabase
+          pip install requests
+          pip install pytz
 
-      - name: Run Weather Script
+      - name: Run Python Script
+        run: python weather_email.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-        run: python send_weather_email.py
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
